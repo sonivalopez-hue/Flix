@@ -1,0 +1,381 @@
+<html lang="en"><head>
+<!-- Playables SDK -->
+<script>// Playables SDK v1.0.0
+// Game lifecycle bridge: rAF-based game-ready detection + event communication
+(function() {
+  'use strict';
+
+  // Idempotency: skip if already initialized (e.g., server-side injection
+  // followed by client-side inject-javascript via the Bloks webview component).
+  if (window.playablesSDK) return;
+
+  var HANDLER_NAME = 'playablesGameEventHandler';
+  var ANDROID_BRIDGE_NAME = '_MetaPlayablesBridge';
+  var RAF_FRAME_THRESHOLD = 3;
+
+  var gameReadySent = false;
+  var firstInteractionSent = false;
+  var errorSent = false;
+  var frameCount = 0;
+  var originalRAF = window.requestAnimationFrame;
+
+  // --- Transport Layer ---
+
+  function hasIOSBridge() {
+    return !!(window.webkit &&
+              window.webkit.messageHandlers &&
+              window.webkit.messageHandlers[HANDLER_NAME]);
+  }
+
+  function hasAndroidBridge() {
+    return !!(window[ANDROID_BRIDGE_NAME] &&
+              typeof window[ANDROID_BRIDGE_NAME].postEvent === 'function');
+  }
+
+  function isInIframe() {
+    return !!(window.parent && window.parent !== window);
+  }
+
+  function sendEvent(eventName, payload) {
+    var message = {
+      type: eventName,
+      payload: payload || {},
+      timestamp: Date.now()
+    };
+
+    if (hasIOSBridge()) {
+      try {
+        window.webkit.messageHandlers[HANDLER_NAME].postMessage(message);
+      } catch (e) { /* ignore */ }
+      return;
+    }
+
+    if (hasAndroidBridge()) {
+    try {
+      var p = payload || {};
+      p.__secureToken = window.__fbAndroidBridgeAuthToken || '';
+      p.timestamp = message.timestamp;
+      window[ANDROID_BRIDGE_NAME].postEvent(
+        eventName,
+        JSON.stringify(p)
+      );
+    } catch (e) { /* ignore */ }
+    return;
+  }
+
+    if (isInIframe()) {
+      try {
+        window.parent.postMessage(message, '*');
+      } catch (e) { /* ignore */ }
+      return;
+    }
+  }
+
+  // --- rAF Game-Ready Detection ---
+
+  function onFrame() {
+    if (gameReadySent) return;
+
+    frameCount++;
+    if (frameCount >= RAF_FRAME_THRESHOLD) {
+      gameReadySent = true;
+      sendEvent('game_ready', {
+        frame_count: frameCount,
+        detected_at: Date.now()
+      });
+      return;
+    }
+
+    originalRAF.call(window, onFrame);
+  }
+
+  if (originalRAF) {
+    window.requestAnimationFrame = function(callback) {
+      if (!gameReadySent) {
+        return originalRAF.call(window, function(timestamp) {
+          frameCount++;
+          if (frameCount >= RAF_FRAME_THRESHOLD && !gameReadySent) {
+            gameReadySent = true;
+            sendEvent('game_ready', {
+              frame_count: frameCount,
+              detected_at: Date.now()
+            });
+          }
+          callback(timestamp);
+        });
+      }
+      return originalRAF.call(window, callback);
+    };
+  }
+
+  // --- First User Interaction Detection ---
+
+  function setupFirstInteractionDetection() {
+    var events = ['touchstart', 'mousedown', 'keydown'];
+
+    function onFirstInteraction() {
+      if (firstInteractionSent) return;
+      firstInteractionSent = true;
+      sendEvent('user_interaction_start', null);
+
+      for (var i = 0; i < events.length; i++) {
+        document.removeEventListener(events[i], onFirstInteraction, true);
+      }
+    }
+
+    for (var i = 0; i < events.length; i++) {
+      document.addEventListener(events[i], onFirstInteraction, true);
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupFirstInteractionDetection);
+  } else {
+    setupFirstInteractionDetection();
+  }
+
+  // --- Auto Error Capture ---
+
+  window.addEventListener('error', function(event) {
+    if (errorSent) return;
+    errorSent = true;
+    sendEvent('error', {
+      message: event.message || 'Unknown error',
+      source: event.filename || '',
+      lineno: event.lineno || 0,
+      colno: event.colno || 0,
+      auto_captured: true
+    });
+  });
+
+  window.addEventListener('unhandledrejection', function(event) {
+    if (errorSent) return;
+    errorSent = true;
+    var reason = event.reason;
+    sendEvent('error', {
+      message: (reason instanceof Error) ? reason.message : String(reason),
+      type: 'unhandled_promise_rejection',
+      auto_captured: true
+    });
+  });
+
+  // --- Public API ---
+
+  window.playablesSDK = {
+    complete: function(score) {
+      sendEvent('game_ended', {
+        score: score,
+        completed: true
+      });
+    },
+
+    error: function(message) {
+      if (errorSent) return;
+      errorSent = true;
+      sendEvent('error', {
+        message: message || 'Unknown error',
+        auto_captured: false
+      });
+    },
+
+    sendEvent: function(eventName, payload) {
+      if (!eventName || typeof eventName !== 'string') return;
+      sendEvent(eventName, payload);
+    }
+  };
+
+  // Kick off rAF detection in case no game code calls rAF immediately
+  if (originalRAF) {
+    originalRAF.call(window, onFrame);
+  }
+})();</script>
+<!-- PLAYABLE_TOUCH_PATCH_V1 --><script>
+(function() {
+  if (window.__playableTouchPatchInstalled) return;
+  window.__playableTouchPatchInstalled = true;
+  var origAdd = EventTarget.prototype.addEventListener;
+  var blockedTypes = { touchstart: 1, touchmove: 1, wheel: 1 };
+  EventTarget.prototype.addEventListener = function(type, listener, options) {
+    if (blockedTypes[type]) {
+      if (options === undefined || options === null) {
+        options = { passive: true };
+      } else if (typeof options === 'boolean') {
+        options = { capture: options, passive: true };
+      } else {
+        options = Object.assign({}, options, { passive: true });
+      }
+    }
+    return origAdd.call(this, type, listener, options);
+  };
+})();
+</script><script>window.Intl=window.Intl||{};Intl.t=function(s){return(Intl._locale&&Intl._locale[s])||s;};</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FLIXLIT VIP - Exclusive Movies</title>
+<link rel="icon" href="data:image/png;base64,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"><script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"><style>*, ::before, ::after{--tw-border-spacing-x:0;--tw-border-spacing-y:0;--tw-translate-x:0;--tw-translate-y:0;--tw-rotate:0;--tw-skew-x:0;--tw-skew-y:0;--tw-scale-x:1;--tw-scale-y:1;--tw-pan-x: ;--tw-pan-y: ;--tw-pinch-zoom: ;--tw-scroll-snap-strictness:proximity;--tw-gradient-from-position: ;--tw-gradient-via-position: ;--tw-gradient-to-position: ;--tw-ordinal: ;--tw-slashed-zero: ;--tw-numeric-figure: ;--tw-numeric-spacing: ;--tw-numeric-fraction: ;--tw-ring-inset: ;--tw-ring-offset-width:0px;--tw-ring-offset-color:#fff;--tw-ring-color:rgb(59 130 246 / 0.5);--tw-ring-offset-shadow:0 0 #0000;--tw-ring-shadow:0 0 #0000;--tw-shadow:0 0 #0000;--tw-shadow-colored:0 0 #0000;--tw-blur: ;--tw-brightness: ;--tw-contrast: ;--tw-grayscale: ;--tw-hue-rotate: ;--tw-invert: ;--tw-saturate: ;--tw-sepia: ;--tw-drop-shadow: ;--tw-backdrop-blur: ;--tw-backdrop-brightness: ;--tw-backdrop-contrast: ;--tw-backdrop-grayscale: ;--tw-backdrop-hue-rotate: ;--tw-backdrop-invert: ;--tw-backdrop-opacity: ;--tw-backdrop-saturate: ;--tw-backdrop-sepia: ;--tw-contain-size: ;--tw-contain-layout: ;--tw-contain-paint: ;--tw-contain-style: }::backdrop{--tw-border-spacing-x:0;--tw-border-spacing-y:0;--tw-translate-x:0;--tw-translate-y:0;--tw-rotate:0;--tw-skew-x:0;--tw-skew-y:0;--tw-scale-x:1;--tw-scale-y:1;--tw-pan-x: ;--tw-pan-y: ;--tw-pinch-zoom: ;--tw-scroll-snap-strictness:proximity;--tw-gradient-from-position: ;--tw-gradient-via-position: ;--tw-gradient-to-position: ;--tw-ordinal: ;--tw-slashed-zero: ;--tw-numeric-figure: ;--tw-numeric-spacing: ;--tw-numeric-fraction: ;--tw-ring-inset: ;--tw-ring-offset-width:0px;--tw-ring-offset-color:#fff;--tw-ring-color:rgb(59 130 246 / 0.5);--tw-ring-offset-shadow:0 0 #0000;--tw-ring-shadow:0 0 #0000;--tw-shadow:0 0 #0000;--tw-shadow-colored:0 0 #0000;--tw-blur: ;--tw-brightness: ;--tw-contrast: ;--tw-grayscale: ;--tw-hue-rotate: ;--tw-invert: ;--tw-saturate: ;--tw-sepia: ;--tw-drop-shadow: ;--tw-backdrop-blur: ;--tw-backdrop-brightness: ;--tw-backdrop-contrast: ;--tw-backdrop-grayscale: ;--tw-backdrop-hue-rotate: ;--tw-backdrop-invert: ;--tw-backdrop-opacity: ;--tw-backdrop-saturate: ;--tw-backdrop-sepia: ;--tw-contain-size: ;--tw-contain-layout: ;--tw-contain-paint: ;--tw-contain-style: }/* ! tailwindcss v3.4.17 | MIT License | https://tailwindcss.com */*,::after,::before{box-sizing:border-box;border-width:0;border-style:solid;border-color:#e5e7eb}::after,::before{--tw-content:''}:host,html{line-height:1.5;-webkit-text-size-adjust:100%;-moz-tab-size:4;tab-size:4;font-family:ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";font-feature-settings:normal;font-variation-settings:normal;-webkit-tap-highlight-color:transparent}body{margin:0;line-height:inherit}hr{height:0;color:inherit;border-top-width:1px}abbr:where([title]){-webkit-text-decoration:underline dotted;text-decoration:underline dotted}h1,h2,h3,h4,h5,h6{font-size:inherit;font-weight:inherit}a{color:inherit;text-decoration:inherit}b,strong{font-weight:bolder}code,kbd,pre,samp{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;font-feature-settings:normal;font-variation-settings:normal;font-size:1em}small{font-size:80%}sub,sup{font-size:75%;line-height:0;position:relative;vertical-align:baseline}sub{bottom:-.25em}sup{top:-.5em}table{text-indent:0;border-color:inherit;border-collapse:collapse}button,input,optgroup,select,textarea{font-family:inherit;font-feature-settings:inherit;font-variation-settings:inherit;font-size:100%;font-weight:inherit;line-height:inherit;letter-spacing:inherit;color:inherit;margin:0;padding:0}button,select{text-transform:none}button,input:where([type=button]),input:where([type=reset]),input:where([type=submit]){-webkit-appearance:button;background-color:transparent;background-image:none}:-moz-focusring{outline:auto}:-moz-ui-invalid{box-shadow:none}progress{vertical-align:baseline}::-webkit-inner-spin-button,::-webkit-outer-spin-button{height:auto}[type=search]{-webkit-appearance:textfield;outline-offset:-2px}::-webkit-search-decoration{-webkit-appearance:none}::-webkit-file-upload-button{-webkit-appearance:button;font:inherit}summary{display:list-item}blockquote,dd,dl,figure,h1,h2,h3,h4,h5,h6,hr,p,pre{margin:0}fieldset{margin:0;padding:0}legend{padding:0}menu,ol,ul{list-style:none;margin:0;padding:0}dialog{padding:0}textarea{resize:vertical}input::placeholder,textarea::placeholder{opacity:1;color:#9ca3af}[role=button],button{cursor:pointer}:disabled{cursor:default}audio,canvas,embed,iframe,img,object,svg,video{display:block;vertical-align:middle}img,video{max-width:100%;height:auto}[hidden]:where(:not([hidden=until-found])){display:none}.fixed{position:fixed}.absolute{position:absolute}.relative{position:relative}.sticky{position:sticky}.inset-0{inset:0px}.right-0{right:0px}.top-0{top:0px}.bottom-6{bottom:1.5rem}.left-1\/2{left:50%}.z-30{z-index:30}.z-50{z-index:50}.z-\[60\]{z-index:60}.z-\[70\]{z-index:70}.mx-auto{margin-left:auto;margin-right:auto}.mb-3{margin-bottom:0.75rem}.mb-4{margin-bottom:1rem}.mb-6{margin-bottom:1.5rem}.ml-2{margin-left:0.5rem}.ml-auto{margin-left:auto}.mt-3{margin-top:0.75rem}.mt-5{margin-top:1.25rem}.mt-6{margin-top:1.5rem}.mt-8{margin-top:2rem}.mb-5{margin-bottom:1.25rem}.mt-1{margin-top:0.25rem}.mt-2{margin-top:0.5rem}.mt-4{margin-top:1rem}.block{display:block}.flex{display:flex}.grid{display:grid}.hidden{display:none}.aspect-video{aspect-ratio:16 / 9}.h-8{height:2rem}.h-96{height:24rem}.h-10{height:2.5rem}.h-12{height:3rem}.max-h-\[90vh\]{max-height:90vh}.min-h-screen{min-height:100vh}.w-40{width:10rem}.w-8{width:2rem}.w-96{width:24rem}.w-full{width:100%}.w-10{width:2.5rem}.w-12{width:3rem}.max-w-2xl{max-width:42rem}.max-w-7xl{max-width:80rem}.max-w-3xl{max-width:48rem}.max-w-md{max-width:28rem}.-translate-x-1\/2{--tw-translate-x:-50%;transform:translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))}.cursor-pointer{cursor:pointer}.grid-cols-2{grid-template-columns:repeat(2, minmax(0, 1fr))}.flex-wrap{flex-wrap:wrap}.items-start{align-items:flex-start}.items-center{align-items:center}.justify-center{justify-content:center}.justify-between{justify-content:space-between}.gap-2{gap:0.5rem}.gap-3{gap:0.75rem}.gap-4{gap:1rem}.gap-6{gap:1.5rem}.space-y-2 > :not([hidden]) ~ :not([hidden]){--tw-space-y-reverse:0;margin-top:calc(0.5rem * calc(1 - var(--tw-space-y-reverse)));margin-bottom:calc(0.5rem * var(--tw-space-y-reverse))}.overflow-auto{overflow:auto}.overflow-hidden{overflow:hidden}.overflow-x-auto{overflow-x:auto}.whitespace-nowrap{white-space:nowrap}.rounded-\[24px\]{border-radius:24px}.rounded-full{border-radius:9999px}.rounded-lg{border-radius:0.5rem}.rounded-xl{border-radius:0.75rem}.rounded-2xl{border-radius:1rem}.rounded-\[20px\]{border-radius:20px}.border{border-width:1px}.border-b{border-bottom-width:1px}.border-white\/10{border-color:rgb(255 255 255 / 0.1)}.border-yellow-500\/10{border-color:rgb(234 179 8 / 0.1)}.border-yellow-500\/20{border-color:rgb(234 179 8 / 0.2)}.border-blue-500\/20{border-color:rgb(59 130 246 / 0.2)}.bg-\[\#0f0a14\]{--tw-bg-opacity:1;background-color:rgb(15 10 20 / var(--tw-bg-opacity, 1))}.bg-\[\#151021\]{--tw-bg-opacity:1;background-color:rgb(21 16 33 / var(--tw-bg-opacity, 1))}.bg-black{--tw-bg-opacity:1;background-color:rgb(0 0 0 / var(--tw-bg-opacity, 1))}.bg-white\/10{background-color:rgb(255 255 255 / 0.1)}.bg-yellow-400{--tw-bg-opacity:1;background-color:rgb(250 204 21 / var(--tw-bg-opacity, 1))}.bg-yellow-500\/10{background-color:rgb(234 179 8 / 0.1)}.bg-yellow-500\/20{background-color:rgb(234 179 8 / 0.2)}.bg-black\/40{background-color:rgb(0 0 0 / 0.4)}.bg-black\/90{background-color:rgb(0 0 0 / 0.9)}.bg-green-600{--tw-bg-opacity:1;background-color:rgb(22 163 74 / var(--tw-bg-opacity, 1))}.bg-yellow-400\/20{background-color:rgb(250 204 21 / 0.2)}.bg-gradient-to-br{background-image:linear-gradient(to bottom right, var(--tw-gradient-stops))}.bg-gradient-to-r{background-image:linear-gradient(to right, var(--tw-gradient-stops))}.from-\[\#1a1200\]{--tw-gradient-from:#1a1200 var(--tw-gradient-from-position);--tw-gradient-to:rgb(26 18 0 / 0) var(--tw-gradient-to-position);--tw-gradient-stops:var(--tw-gradient-from), var(--tw-gradient-to)}.from-yellow-400{--tw-gradient-from:#facc15 var(--tw-gradient-from-position);--tw-gradient-to:rgb(250 204 21 / 0) var(--tw-gradient-to-position);--tw-gradient-stops:var(--tw-gradient-from), var(--tw-gradient-to)}.from-yellow-500\/10{--tw-gradient-from:rgb(234 179 8 / 0.1) var(--tw-gradient-from-position);--tw-gradient-to:rgb(234 179 8 / 0) var(--tw-gradient-to-position);--tw-gradient-stops:var(--tw-gradient-from), var(--tw-gradient-to)}.from-\[\#0f1220\]{--tw-gradient-from:#0f1220 var(--tw-gradient-from-position);--tw-gradient-to:rgb(15 18 32 / 0) var(--tw-gradient-to-position);--tw-gradient-stops:var(--tw-gradient-from), var(--tw-gradient-to)}.via-\[\#2a1f00\]{--tw-gradient-to:rgb(42 31 0 / 0)  var(--tw-gradient-to-position);--tw-gradient-stops:var(--tw-gradient-from), #2a1f00 var(--tw-gradient-via-position), var(--tw-gradient-to)}.to-\[\#0f0a00\]{--tw-gradient-to:#0f0a00 var(--tw-gradient-to-position)}.to-amber-500{--tw-gradient-to:#f59e0b var(--tw-gradient-to-position)}.to-amber-500\/10{--tw-gradient-to:rgb(245 158 11 / 0.1) var(--tw-gradient-to-position)}.to-amber-600{--tw-gradient-to:#d97706 var(--tw-gradient-to-position)}.to-\[\#0a0f1a\]{--tw-gradient-to:#0a0f1a var(--tw-gradient-to-position)}.bg-clip-text{-webkit-background-clip:text;background-clip:text}.p-0{padding:0px}.p-3{padding:0.75rem}.p-4{padding:1rem}.p-6{padding:1.5rem}.p-2{padding:0.5rem}.px-2{padding-left:0.5rem;padding-right:0.5rem}.px-3{padding-left:0.75rem;padding-right:0.75rem}.px-4{padding-left:1rem;padding-right:1rem}.px-5{padding-left:1.25rem;padding-right:1.25rem}.px-6{padding-left:1.5rem;padding-right:1.5rem}.px-8{padding-left:2rem;padding-right:2rem}.py-0\.5{padding-top:0.125rem;padding-bottom:0.125rem}.py-1{padding-top:0.25rem;padding-bottom:0.25rem}.py-2{padding-top:0.5rem;padding-bottom:0.5rem}.py-3{padding-top:0.75rem;padding-bottom:0.75rem}.pb-2{padding-bottom:0.5rem}.pb-24{padding-bottom:6rem}.text-center{text-align:center}.font-mono{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace}.text-3xl{font-size:1.875rem;line-height:2.25rem}.text-\[10px\]{font-size:10px}.text-\[11px\]{font-size:11px}.text-\[9px\]{font-size:9px}.text-lg{font-size:1.125rem;line-height:1.75rem}.text-sm{font-size:0.875rem;line-height:1.25rem}.text-xl{font-size:1.25rem;line-height:1.75rem}.text-xs{font-size:0.75rem;line-height:1rem}.text-2xl{font-size:1.5rem;line-height:2rem}.font-black{font-weight:900}.font-bold{font-weight:700}.leading-tight{line-height:1.25}.text-black{--tw-text-opacity:1;color:rgb(0 0 0 / var(--tw-text-opacity, 1))}.text-transparent{color:transparent}.text-white{--tw-text-opacity:1;color:rgb(255 255 255 / var(--tw-text-opacity, 1))}.text-white\/30{color:rgb(255 255 255 / 0.3)}.text-white\/50{color:rgb(255 255 255 / 0.5)}.text-white\/70{color:rgb(255 255 255 / 0.7)}.text-yellow-300{--tw-text-opacity:1;color:rgb(253 224 71 / var(--tw-text-opacity, 1))}.text-yellow-400{--tw-text-opacity:1;color:rgb(250 204 21 / var(--tw-text-opacity, 1))}.text-yellow-400\/60{color:rgb(250 204 21 / 0.6)}.text-blue-400{--tw-text-opacity:1;color:rgb(96 165 250 / var(--tw-text-opacity, 1))}.text-white\/60{color:rgb(255 255 255 / 0.6)}.text-yellow-200{--tw-text-opacity:1;color:rgb(254 240 138 / var(--tw-text-opacity, 1))}.shadow-\[0_0_20px_rgba\(234\2c 179\2c 8\2c 0\.3\)\]{--tw-shadow:0 0 20px rgba(234,179,8,0.3);--tw-shadow-colored:0 0 20px var(--tw-shadow-color);box-shadow:var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow)}.shadow-xl{--tw-shadow:0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);--tw-shadow-colored:0 20px 25px -5px var(--tw-shadow-color), 0 8px 10px -6px var(--tw-shadow-color);box-shadow:var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow)}.outline-none{outline:2px solid transparent;outline-offset:2px}.blur-\[80px\]{--tw-blur:blur(80px);filter:var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)}.hover\:scale-105:hover{--tw-scale-x:1.05;--tw-scale-y:1.05;transform:translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))}.hover\:bg-white\/20:hover{background-color:rgb(255 255 255 / 0.2)}.hover\:bg-green-500:hover{--tw-bg-opacity:1;background-color:rgb(34 197 94 / var(--tw-bg-opacity, 1))}.focus\:border-yellow-500:focus{--tw-border-opacity:1;border-color:rgb(234 179 8 / var(--tw-border-opacity, 1))}.focus\:border-yellow-400:focus{--tw-border-opacity:1;border-color:rgb(250 204 21 / var(--tw-border-opacity, 1))}.active\:scale-95:active{--tw-scale-x:.95;--tw-scale-y:.95;transform:translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))}@media (min-width: 768px){.md\:w-64{width:16rem}.md\:grid-cols-4{grid-template-columns:repeat(4, minmax(0, 1fr))}.md\:rounded-2xl{border-radius:1rem}.md\:p-4{padding:1rem}.md\:p-8{padding:2rem}.md\:text-5xl{font-size:3rem;line-height:1}.md\:text-base{font-size:1rem;line-height:1.5rem}.md\:text-2xl{font-size:1.5rem;line-height:2rem}}@media (min-width: 1024px){.lg\:grid-cols-5{grid-template-columns:repeat(5, minmax(0, 1fr))}}</style></head>
+<body style="background:#07050a;color:white;font-family:system-ui" class="min-h-screen pb-24">
+<!-- VIP Header Gold -->
+<div class="sticky top-0 z-30 bg-gradient-to-r from-[#1a1200] to-[#0f0a00] border-b border-yellow-500/20 p-3 flex justify-between items-center">
+<div class="flex items-center gap-2"><span class="w-8 h-8 bg-gradient-to-br from-yellow-400 to-amber-600 rounded-lg flex items-center justify-center font-black text-black text-sm">V</span><b class="text-xl"><span class="text-yellow-400">FLIXLIT</span> <span class="text-white">VIP</span></b><span class="text-[9px] bg-gradient-to-r from-yellow-400 to-amber-500 text-black px-2 py-0.5 rounded-full font-black ml-2">VIP • EXCLUSIVE</span></div>
+<div class="flex gap-2"><button onclick="openSub()" class="bg-gradient-to-r from-yellow-400 to-amber-500 text-black px-5 py-2 rounded-full text-xs font-black cursor-pointer hover:scale-105">VIP ACCESS</button></div>
+</div>
+<div class="bg-gradient-to-r from-yellow-500/10 to-amber-500/10 border-b border-yellow-500/10 text-center py-2 text-[11px] flex justify-center gap-4"><span>💎 VIP Exclusive Movies</span><span>• Kuda 3003350273 •</span><span>🔥 No Ads • 4K • Fast Download</span></div>
+
+<div class="p-4 max-w-7xl mx-auto">
+<!-- VIP Hero Gold -->
+<div class="bg-gradient-to-br from-[#1a1200] via-[#2a1f00] to-[#0f0a00] rounded-[24px] p-6 md:p-8 mb-6 border border-yellow-500/20 relative overflow-hidden">
+<div class="absolute top-0 right-0 w-96 h-96 bg-yellow-500/10 rounded-full blur-[80px]"></div>
+<div class="relative">
+<div class="flex items-center gap-2 mb-3"><span class="bg-yellow-400 text-black text-[10px] font-black px-3 py-1 rounded-full">VIP EXCLUSIVE</span><span class="text-yellow-400/60 text-xs">• Premium Only • No Ads</span></div>
+<h1 class="text-3xl md:text-5xl font-black leading-tight">FLIXLIT <span class="bg-gradient-to-r from-yellow-400 to-amber-500 bg-clip-text text-transparent">VIP</span><br>Exclusive Movies</h1>
+<p class="text-sm md:text-base text-white/70 mt-3 max-w-2xl">Access Nollywood, Hollywood, Yoruba Blockbusters in 4K. No ads, fast streaming, instant download. Join 10,000+ VIP members.</p>
+<div class="flex flex-wrap gap-3 mt-5">
+<button onclick="openSub()" class="bg-gradient-to-r from-yellow-400 to-amber-500 text-black px-8 py-3 rounded-full font-black text-sm cursor-pointer hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(234,179,8,0.3)]">Unlock VIP Now - From ₦500</button>
+<a href="https://t.me/Flixlit12" target="_blank" class="bg-white/10 border border-white/10 px-6 py-3 rounded-full font-bold text-sm cursor-pointer hover:bg-white/20 flex items-center gap-2"><i class="fab fa-telegram"></i> Join VIP Channel</a>
+</div>
+<div class="flex gap-6 mt-6 text-xs"><div><b class="text-yellow-400 text-lg">500+</b><p class="text-white/50">VIP Movies</p></div><div><b class="text-yellow-400 text-lg">10K+</b><p class="text-white/50">Members</p></div><div><b class="text-yellow-400 text-lg">4K</b><p class="text-white/50">Quality</p></div></div>
+</div>
+</div>
+
+<div class="flex gap-2 mb-4 overflow-x-auto pb-2">
+<button onclick="filterType('all')" id="fAll" class="px-5 py-2 rounded-full text-xs bg-gradient-to-r from-yellow-400 to-amber-500 text-black font-black whitespace-nowrap cursor-pointer">All VIP</button>
+<button onclick="filterType('movie')" id="fMovie" class="px-5 py-2 rounded-full text-xs bg-white/10 whitespace-nowrap cursor-pointer hover:bg-white/20">Movies</button>
+<button onclick="filterType('series')" id="fSeries" class="px-5 py-2 rounded-full text-xs bg-white/10 whitespace-nowrap cursor-pointer hover:bg-white/20">Series</button>
+<button onclick="filterType('exclusive')" id="fExclusive" class="px-5 py-2 rounded-full text-xs bg-white/10 whitespace-nowrap cursor-pointer hover:bg-white/20">🔥 Exclusive</button>
+<input id="search" placeholder="Search VIP movies..." oninput="render()" class="ml-auto bg-[#151021] border border-white/10 rounded-full px-4 py-2 text-xs w-40 md:w-64 focus:border-yellow-500 outline-none">
+</div>
+
+<div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4" id="grid"></div>
+<div id="status" class="text-center text-xs text-white/30 mt-8">Loading VIP...</div>
+</div>
+
+<!-- Player -->
+<div id="player" class="hidden fixed inset-0 bg-black z-50 p-0 md:p-4 overflow-auto">
+<div class="bg-[#0f0a14] min-h-screen md:rounded-2xl overflow-hidden">
+<div class="flex justify-between items-center p-4 border-b border-white/10"><button onclick="closePlayer()" class="bg-white/10 px-4 py-2 rounded-full text-sm cursor-pointer hover:bg-white/20">← Back</button><span class="text-xs bg-yellow-500/20 text-yellow-300 px-3 py-1 rounded-full font-bold">VIP PLAYING</span></div>
+<div class="p-4">
+<video id="vid" controls="" class="w-full aspect-video bg-black rounded-xl"></video>
+<div class="flex justify-between items-start mt-4 gap-4"><div><h2 id="ptitle" class="text-xl md:text-2xl font-black"></h2><p id="pdesc" class="text-sm text-white/60 mt-2 max-w-3xl"></p></div><div class="flex gap-2"><button onclick="shareMovie()" class="bg-white/10 w-10 h-10 rounded-full flex items-center justify-center cursor-pointer"><i class="fa fa-share"></i></button><a id="down" href="#" download="" class="bg-gradient-to-r from-yellow-400 to-amber-500 text-black px-6 py-3 rounded-full font-black text-sm cursor-pointer hover:scale-105 flex items-center gap-2"><i class="fa fa-download"></i> Download VIP</a></div></div>
+<div id="episodeBox" class="hidden mt-6"><h3 class="font-bold mb-3 text-yellow-400">Episodes</h3><div id="episodeList" class="space-y-2"></div></div>
+</div>
+</div>
+</div>
+
+<!-- Subscribe Modal VIP Gold -->
+<div id="sub" class="hidden fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-4">
+<div class="bg-gradient-to-br from-[#1a1200] to-[#0f0a00] rounded-[20px] w-full max-w-md p-6 border border-yellow-500/20 max-h-[90vh] overflow-auto">
+<div class="flex justify-between items-center mb-5"><div><b class="text-lg">FLIXLIT VIP Access</b><p class="text-xs text-yellow-400/60">Pay to unlock all VIP movies</p></div><button onclick="closeSub()" class="bg-white/10 w-8 h-8 rounded-full cursor-pointer">✕</button></div>
+
+<div class="bg-black/40 rounded-2xl p-4 mb-4 border border-yellow-500/20">
+<div class="flex justify-between items-center"><div><p class="text-[10px] text-yellow-400/60">KUDA BANK - NIGERIA</p><p class="font-bold">FLIXLIT VIP</p><p class="font-mono text-2xl font-black">3003350273</p><p id="kudaNameDisplay" class="text-xs text-white/60">TUNENEWSVIP</p></div><div class="w-12 h-12 bg-yellow-400/20 rounded-xl flex items-center justify-center"><i class="fa fa-crown text-yellow-400"></i></div></div>
+<p id="priceDisplay" class="text-xs mt-3 bg-yellow-500/10 p-2 rounded-lg text-yellow-200">Daily ₦500 | Weekly ₦2000 | Monthly ₦5000</p>
+</div>
+
+<div class="bg-gradient-to-br from-[#0f1220] to-[#0a0f1a] rounded-2xl p-4 mb-4 border border-blue-500/20">
+<p class="text-[10px] text-blue-400">FOREIGN PAY - TELEGRAM WALLET / USDT</p>
+<p class="font-bold text-sm mt-1"><i class="fab fa-telegram text-blue-400"></i> @Flixlit12</p>
+<p class="text-xs text-white/60 mt-1">Pay via Telegram Wallet or USDT TRC20, get VIP code instantly</p>
+</div>
+
+<input id="code" placeholder="Enter VIP Activation Code (e.g VIP-XXXX)" class="w-full bg-black border border-yellow-500/20 rounded-full px-4 py-3 mb-3 text-sm focus:border-yellow-400 outline-none">
+<button onclick="activate()" class="w-full bg-gradient-to-r from-yellow-400 to-amber-500 text-black py-3 rounded-full font-black cursor-pointer hover:scale-105 active:scale-95">Activate VIP Now</button>
+<a id="waLink" href="https://wa.me/2347063226816?text=Hi%20I%20paid%20to%20Kuda%203003350273%20for%20FLIXLIT%20VIP" target="_blank" class="block mt-3 bg-green-600 py-3 rounded-full font-bold text-center text-sm cursor-pointer hover:bg-green-500"><i class="fab fa-whatsapp"></i> WhatsApp: 07063226816 - Send Proof</a>
+<button onclick="quick()" class="w-full mt-2 bg-white/10 py-3 rounded-full text-xs cursor-pointer hover:bg-white/20">Test VIP 7 Days (I Paid)</button>
+<p class="text-[10px] text-white/30 text-center mt-3">VIP Codes: VIP2024=30days, DAILY500=1day, WEEKLY2000=7days, MONTHLY5000=30days</p>
+</div>
+</div>
+
+<div id="toast" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 bg-gradient-to-r from-yellow-400 to-amber-500 text-black px-6 py-3 rounded-full font-bold text-sm z-[70] shadow-xl"></div>
+
+<script>
+let movies=[], currentMovie=null, currentFilter='all';
+let blobId=localStorage.getItem('flixlit_vip_blobId')||"1384152150843904002";
+let settings=JSON.parse(localStorage.getItem('flixhub_settings')||'null')||{kudaName:'FLIXLIT',kudaNumber:'3003350273',whatsapp:'07063226816',telegram:'@Flixlit12',daily:500,weekly:2000,monthly:5000};
+
+function openSub(){document.getElementById('sub').classList.remove('hidden');}
+function closeSub(){document.getElementById('sub').classList.add('hidden');}
+function closePlayer(){document.getElementById('player').classList.add('hidden'); document.getElementById('vid').pause();}
+function shareMovie(){if(currentMovie){navigator.clipboard.writeText('🎬 VIP: Watch '+currentMovie.title+' on FLIXLIT VIP https://t.me/Flixlit12'); toast('VIP Link copied!');}}
+
+async function createNewBlob(data){try{let res=await fetch('https://jsonblob.com/api/jsonBlob',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});if(res.ok){let loc=res.headers.get('Location')||res.headers.get('location');if(loc){let id=loc.split('/').pop(); blobId=id; localStorage.setItem('flixlit_vip_blobId',id); return id;}}}catch(e){} return null;}
+
+async function loadFromBlob(){
+ try{
+  document.getElementById('status').innerText='Loading VIP movies...';
+  let res=await fetch('https://jsonblob.com/api/jsonBlob/'+blobId);
+  if(res.status===404){
+   let backup=JSON.parse(localStorage.getItem('flixlit_backup_vip')||localStorage.getItem('flixlit_backup_v14')||localStorage.getItem('flixhub_final')||'[]');
+   if(backup.length>0){ movies=backup; render(); toast('Restored '+backup.length+' VIP movies from backup'); return; }
+   movies=[]; render(); return;
+  }
+  let data=res.ok?await res.json():[];
+  movies=Array.isArray(data)?data:[];
+  if(movies.length===0){ let old=JSON.parse(localStorage.getItem('flixhub_final')||'[]'); if(old.length>0) movies=old; }
+  localStorage.setItem('flixlit_backup_vip',JSON.stringify(movies));
+  render();
+ }catch(e){
+  movies=JSON.parse(localStorage.getItem('flixlit_backup_vip')||localStorage.getItem('flixhub_final')||'[]');
+  render();
+ }
+}
+
+function filterType(t){
+ currentFilter=t;
+ ['fAll','fMovie','fSeries','fExclusive'].forEach(id=>{
+  let el=document.getElementById(id);
+  if(!el) return;
+  if((t==='all'&&id==='fAll')||(t==='movie'&&id==='fMovie')||(t==='series'&&id==='fSeries')||(t==='exclusive'&&id==='fExclusive')){
+   el.className='px-5 py-2 rounded-full text-xs bg-gradient-to-r from-yellow-400 to-amber-500 text-black font-black whitespace-nowrap cursor-pointer';
+  } else {
+   el.className='px-5 py-2 rounded-full text-xs bg-white/10 whitespace-nowrap cursor-pointer hover:bg-white/20';
+  }
+ });
+ render();
+}
+
+function render(){
+ let g=document.getElementById('grid'); g.innerHTML='';
+ let q=document.getElementById('search').value.toLowerCase();
+ let filtered=movies.filter(m=>{
+  if(!m||!m.title) return false;
+  if(currentFilter!=='all'){
+   if(currentFilter==='exclusive'&&!m.exclusive) return false;
+   if(currentFilter!=='all'&&currentFilter!=='exclusive'&&m.type!==currentFilter) return false;
+  }
+  if(q&&!m.title.toLowerCase().includes(q)) return false;
+  if(m.video&&m.video.startsWith('blob:')) return false;
+  return true;
+ });
+ document.getElementById('status').innerText=filtered.length+' VIP movies • Permanent • No Expire';
+ if(filtered.length===0){ g.innerHTML='<div class="col-span-full text-center p-12 bg-[#151021] rounded-[20px] border border-yellow-500/10"><div class="w-16 h-16 bg-yellow-500/10 rounded-full flex items-center justify-center mx-auto mb-4"><i class="fa fa-crown text-yellow-400 text-2xl"></i></div><p class="font-bold">No VIP movies yet</p><p class="text-xs text-white/40 mt-2">Use VIP Creator to upload exclusive movies with permanent links</p><a href="creator.html" class="inline-block mt-4 bg-yellow-400 text-black px-6 py-2 rounded-full text-xs font-black">Open VIP Creator</a></div>'; return; }
+ filtered.forEach(m=>{
+  let d=document.createElement('div');
+  d.className='bg-[#151021] rounded-[16px] overflow-hidden cursor-pointer border border-yellow-500/10 hover:border-yellow-400/30 hover:scale-[1.02] transition-all group';
+  let posterHtml=m.poster?`<img src="${m.poster}" loading="lazy" class="w-full h-full object-cover group-hover:scale-110 transition duration-500">`:`<div class="w-full h-full bg-gradient-to-br from-yellow-600 to-amber-800 flex items-center justify-center text-3xl font-black">${m.title[0]}</div>`;
+  let badge=m.exclusive?`<span class="absolute top-2 left-2 bg-gradient-to-r from-yellow-400 to-amber-500 text-black text-[9px] px-2 py-1 rounded-full font-black">VIP EXCLUSIVE</span>`:m.type==='series'?`<span class="absolute top-2 left-2 bg-blue-600 text-[9px] px-2 py-1 rounded-full font-bold">SERIES • ${m.episodes?.length||0}</span>`:`<span class="absolute top-2 left-2 bg-black/70 backdrop-blur text-[9px] px-2 py-1 rounded-full font-bold border border-yellow-500/20">VIP</span>`;
+  let crown=m.exclusive?`<span class="absolute top-2 right-2 w-6 h-6 bg-yellow-400 rounded-full flex items-center justify-center text-black text-[10px]"><i class="fa fa-crown"></i></span>`:'';
+  d.innerHTML=`<div class="h-60 relative overflow-hidden bg-black">${posterHtml}${badge}${crown}<div class="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-60"></div><div class="absolute bottom-2 right-2 w-8 h-8 bg-yellow-400 rounded-full flex items-center justify-center text-black opacity-0 group-hover:opacity-100 transition"><i class="fa fa-play text-xs"></i></div></div><div class="p-3"><p class="font-bold text-sm truncate">${m.title}</p><p class="text-xs text-white/50 truncate">${m.genre||'VIP'} • ${m.year||'2024'} ${m.exclusive?'• Exclusive':''}</p></div>`;
+  d.onclick=()=>playMovie(m);
+  g.appendChild(d);
+ });
+}
+
+function playMovie(m){
+ if(!isSubActive()){openSub(); return;}
+ currentMovie=m;
+ document.getElementById('player').classList.remove('hidden');
+ document.getElementById('ptitle').innerText=m.title+' ('+m.year+') • VIP Exclusive';
+ document.getElementById('pdesc').innerText=m.desc||'Exclusive VIP movie - No ads, 4K quality, fast download';
+ document.getElementById('episodeBox').classList.add('hidden');
+ if(m.type==='movie'){ document.getElementById('vid').src=m.video; document.getElementById('down').href=m.video; }
+ else { document.getElementById('episodeBox').classList.remove('hidden'); document.getElementById('vid').src=m.episodes[0].video; document.getElementById('down').href=m.episodes[0].video; document.getElementById('episodeList').innerHTML=m.episodes.map((ep,i)=>`<div onclick="playEpisode(${i})" class="flex justify-between items-center bg-white/5 hover:bg-yellow-500/10 p-3 rounded-xl cursor-pointer border border-transparent hover:border-yellow-500/20"><span class="text-sm">${ep.title}</span><i class="fa fa-play text-yellow-400/60"></i></div>`).join(''); }
+ document.getElementById('vid').play().catch(()=>{});
+}
+function playEpisode(i){ let ep=currentMovie.episodes[i]; document.getElementById('vid').src=ep.video; document.getElementById('down').href=ep.video; document.getElementById('vid').play(); }
+function isSubActive(){let e=localStorage.getItem('flixhub_sub'); return e&&new Date(e)>new Date();}
+function toast(m){let t=document.getElementById('toast'); t.innerText=m; t.classList.remove('hidden'); setTimeout(()=>t.classList.add('hidden'),3000);}
+function activate(){ let c=document.getElementById('code').value.toUpperCase().trim(); let days=0; if(c.startsWith('VIP')||c=='VIP2024') days=30; else if(c=='DAILY500') days=1; else if(c=='WEEKLY2000'||c.startsWith('FLIX-')) days=7; else if(c=='MONTHLY5000'||c=='FLIXVIP') days=30; let custom=JSON.parse(localStorage.getItem('flixhub_codes')||'[]'); let found=custom.find(x=>x.code.toUpperCase()===c&&new Date(x.expires)>new Date()); if(found) days=found.days; if(days){let d=new Date(); d.setDate(d.getDate()+days); localStorage.setItem('flixhub_sub',d.toISOString()); closeSub(); toast('VIP Activated '+days+' days! 💎'); render();} else toast('Invalid VIP code'); }
+function quick(){let d=new Date(); d.setDate(d.getDate()+7); localStorage.setItem('flixhub_sub',d.toISOString()); closeSub(); toast('VIP Test Activated 7 days!'); render();}
+function applySettings(){ document.getElementById('kudaNameDisplay').innerText=settings.kudaName; document.getElementById('kudaNumberDisplay').innerText=settings.kudaNumber; document.getElementById('priceDisplay').innerText=`VIP Daily ₦${settings.daily} | Weekly ₦${settings.weekly} | Monthly ₦${settings.monthly} - No Ads 4K`; let wa=settings.whatsapp.replace(/[^0-9]/g,''); if(wa.startsWith('0')) wa='234'+wa.slice(1); document.getElementById('waLink').href=`https://wa.me/${wa}?text=Hi%20I%20paid%20to%20Kuda%20${settings.kudaNumber}%20for%20FLIXLIT%20VIP`; }
+applySettings(); loadFromBlob();
+</script>
+</body></html>
